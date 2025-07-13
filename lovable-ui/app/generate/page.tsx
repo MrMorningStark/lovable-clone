@@ -547,7 +547,7 @@ export default function GeneratePage() {
   };
 
   // Left Panel Component
-  const LeftPanel = () => (
+  const LeftPanel = useCallback(() => (
     <>
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900/50">
@@ -675,10 +675,10 @@ export default function GeneratePage() {
         )}
       </div>
     </>
-  );
+  ), [messages, isGenerating, error, followUpInput, previewUrl, sandboxId, prompt, user, router]);
 
   // Right Panel Component
-  const RightPanel = () => (
+  const RightPanel = useCallback(() => (
     <div className="h-full flex flex-col bg-gray-800">
       {/* Preview Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800/50">
@@ -760,7 +760,7 @@ export default function GeneratePage() {
         )}
       </div>
     </div>
-  );
+  ), [previewUrl, isGenerating, previewMessages]);
 
   return (
     <main className="h-screen bg-black flex flex-col overflow-hidden">
