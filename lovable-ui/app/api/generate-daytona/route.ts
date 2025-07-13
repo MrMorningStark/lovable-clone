@@ -4,9 +4,16 @@ import path from "path";
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt } = await req.json();
+    console.log("🔄 API: Starting generation request");
+    
+    const { prompt, sandboxId, isFollowUp } = await req.json();
+    
+    console.log("📝 API: Received prompt:", prompt);
+    console.log("📦 API: Received sandboxId:", sandboxId);
+    console.log("🔄 API: isFollowUp:", isFollowUp);
     
     if (!prompt) {
+      console.error("❌ API: No prompt provided");
       return new Response(
         JSON.stringify({ error: "Prompt is required" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
@@ -14,13 +21,22 @@ export async function POST(req: NextRequest) {
     }
     
     if (!process.env.DAYTONA_API_KEY || !process.env.ANTHROPIC_API_KEY) {
+      console.error("❌ API: Missing required environment variables");
+      console.error("🔑 DAYTONA_API_KEY present:", !!process.env.DAYTONA_API_KEY);
+      console.error("🔑 ANTHROPIC_API_KEY present:", !!process.env.ANTHROPIC_API_KEY);
       return new Response(
-        JSON.stringify({ error: "Missing API keys" }),
+        JSON.stringify({ error: "Missing API keys. Please check your environment variables." }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
     
-    console.log("[API] Starting Daytona generation for prompt:", prompt);
+    console.log(`[API] Starting ${isFollowUp ? 'follow-up' : 'initial'} generation for prompt:`, prompt);
+    if (isFollowUp && !sandboxId) {
+      return new Response(
+        JSON.stringify({ error: "Sandbox ID is required for follow-up requests" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
     
     // Create a streaming response
     const encoder = new TextEncoder();
@@ -30,9 +46,22 @@ export async function POST(req: NextRequest) {
     // Start the async generation
     (async () => {
       try {
-        // Use the generate-in-daytona.ts script
-        const scriptPath = path.join(process.cwd(), "scripts", "generate-in-daytona.ts");
-        const child = spawn("npx", ["tsx", scriptPath, prompt], {
+        // Use the appropriate script based on request type
+        const scriptPath = isFollowUp 
+          ? path.join(process.cwd(), "scripts", "continue-in-daytona.ts")
+          : path.join(process.cwd(), "scripts", "generate-in-daytona.ts");
+        
+        console.log("📄 API: Script path:", scriptPath);
+        
+        const args = isFollowUp 
+          ? ["tsx", scriptPath, sandboxId, prompt]
+          : sandboxId 
+            ? ["tsx", scriptPath, sandboxId, prompt]
+            : ["tsx", scriptPath, prompt];
+            
+        console.log("🚀 API: Spawning process with args:", args);
+          
+        const child = spawn("npx", args, {
           env: {
             ...process.env,
             DAYTONA_API_KEY: process.env.DAYTONA_API_KEY,
@@ -40,7 +69,7 @@ export async function POST(req: NextRequest) {
           },
         });
         
-        let sandboxId = "";
+        let responseSandboxId = "";
         let previewUrl = "";
         let buffer = "";
         
@@ -110,7 +139,7 @@ export async function POST(req: NextRequest) {
                 // Extract sandbox ID
                 const sandboxMatch = output.match(/Sandbox created: ([a-f0-9-]+)/);
                 if (sandboxMatch) {
-                  sandboxId = sandboxMatch[1];
+                  responseSandboxId = sandboxMatch[1];
                 }
                 
                 // Extract preview URL
@@ -142,6 +171,7 @@ export async function POST(req: NextRequest) {
         // Wait for process to complete
         await new Promise((resolve, reject) => {
           child.on("exit", (code) => {
+            console.log(`🏁 API: Process exited with code ${code}`);
             if (code === 0) {
               resolve(code);
             } else {
@@ -149,7 +179,10 @@ export async function POST(req: NextRequest) {
             }
           });
           
-          child.on("error", reject);
+          child.on("error", (error) => {
+            console.error("❌ API: Child process error:", error);
+            reject(error);
+          });
         });
         
         // Send completion with preview URL
@@ -157,7 +190,7 @@ export async function POST(req: NextRequest) {
           await writer.write(
             encoder.encode(`data: ${JSON.stringify({ 
               type: "complete", 
-              sandboxId,
+              sandboxId: responseSandboxId,
               previewUrl 
             })}\n\n`)
           );

@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Lovable Clone - AI-Powered Code Generation",
-  description: "Build applications faster with AI-powered code generation",
+  title: "RAJAT - AI-Powered Code Generation",
+  description: "Build applications faster with RAJAT's AI-powered code generation",
 };
 
 export default function RootLayout({

@@ -1,8 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import Navbar from "@/components/Navbar";
+import ResizablePanels from "@/components/ResizablePanels";
+
+interface User {
+  email: string;
+  name: string;
+  projects: Array<{
+    id: string;
+    name: string;
+    prompt: string;
+    sandboxId: string;
+    previewUrl: string;
+    createdAt: string;
+  }>;
+}
 
 interface Message {
   type: "claude_message" | "tool_use" | "tool_result" | "progress" | "error" | "complete";
@@ -15,17 +28,31 @@ interface Message {
   sandboxId?: string;
 }
 
+interface PreviewMessage {
+  id: string;
+  text: string;
+  timestamp: number;
+}
+
 export default function GeneratePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const prompt = searchParams.get("prompt") || "";
+  const existingSandboxId = searchParams.get("sandboxId") || null;
+  const isContinuing = searchParams.get("continue") === "true";
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewMessages, setPreviewMessages] = useState<PreviewMessage[]>([]);
+  const [followUpInput, setFollowUpInput] = useState("");
+  const [sandboxId, setSandboxId] = useState<string | null>(existingSandboxId);
+  const [user, setUser] = useState<User | null>(null);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasStartedRef = useRef(false);
+  const previewMessageIdRef = useRef(0);
   
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -35,36 +62,424 @@ export default function GeneratePage() {
     scrollToBottom();
   }, [messages]);
   
+  // Define functions first
+  const saveProject = useCallback((sandboxId: string, previewUrl: string | null) => {
+    if (!user) return;
+    
+    try {
+      const projectId = Date.now().toString();
+      const projectName = generateProjectName(prompt);
+      
+      const newProject = {
+        id: projectId,
+        name: projectName,
+        prompt,
+        sandboxId,
+        previewUrl: previewUrl || "",
+        createdAt: new Date().toISOString()
+      };
+      
+      // Update user data
+      const updatedUser = {
+        ...user,
+        projects: [...user.projects, newProject]
+      };
+      
+      // Save to localStorage
+      localStorage.setItem("lovable_current_user", JSON.stringify(updatedUser));
+      
+      // Update users database
+      const users = JSON.parse(localStorage.getItem("lovable_users") || "{}");
+      if (users[user.email]) {
+        users[user.email].projects = updatedUser.projects;
+        localStorage.setItem("lovable_users", JSON.stringify(users));
+      }
+      
+      setUser(updatedUser);
+      setCurrentProjectId(projectId);
+      
+      console.log("Project saved:", newProject);
+    } catch (error) {
+      console.error("Failed to save project:", error);
+    }
+  }, [user, prompt]);
+
+  const generateWebsite = useCallback(async () => {
+    try {
+      console.log("🚀 Starting generation with prompt:", prompt);
+      console.log("📦 Existing sandbox ID:", existingSandboxId);
+      console.log("👤 User:", user);
+      
+      // Add a message to show generation started
+      setMessages(prev => [...prev, {
+        type: "claude_message",
+        content: "**🚀 RAJAT:** Starting to generate your website..."
+      }]);
+      
+      const requestBody = { 
+        prompt,
+        sandboxId: existingSandboxId,
+        isFollowUp: false
+      };
+      
+      console.log("📤 Sending request body:", requestBody);
+      
+      const response = await fetch("/api/generate-daytona", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+      
+      console.log("📬 Response status:", response.status);
+      console.log("📬 Response headers:", Object.fromEntries(response.headers.entries()));
+
+      if (!response.ok) {
+        let errorMessage;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
+          console.error("❌ API Error Data:", errorData);
+        } catch (e) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          console.error("❌ Failed to parse error response:", e);
+        }
+        throw new Error(errorMessage);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      console.log("📖 Starting to read response stream...");
+      let messageCount = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log("✅ Stream reading completed");
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        console.log("📦 Received chunk:", chunk);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            console.log("📥 Processing data line:", data);
+
+            if (data === "[DONE]") {
+              console.log("🏁 Received DONE signal");
+              setIsGenerating(false);
+              break;
+            }
+
+            try {
+              const message = JSON.parse(data) as Message;
+              messageCount++;
+              console.log(`📨 Message ${messageCount}:`, message);
+              
+              if (message.type === "error") {
+                console.error("❌ Error message received:", message.message);
+                throw new Error(message.message);
+              } else if (message.type === "complete") {
+                const newPreviewUrl = message.previewUrl || null;
+                const newSandboxId = message.sandboxId || null;
+                
+                console.log("🎉 Generation complete!");
+                console.log("🔗 Preview URL:", newPreviewUrl);
+                console.log("📦 Sandbox ID:", newSandboxId);
+                
+                setPreviewUrl(newPreviewUrl);
+                setSandboxId(newSandboxId);
+                setIsGenerating(false);
+                
+                // Save project for new generations (not follow-ups)
+                if (newSandboxId && !isContinuing && user) {
+                  console.log("💾 Saving project...");
+                  saveProject(newSandboxId, newPreviewUrl);
+                }
+              } else {
+                console.log("💬 Adding message to chat:", message);
+                setMessages((prev) => [...prev, message]);
+              }
+            } catch (e) {
+              console.warn("⚠️ Failed to parse message:", data, e);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("❌ Error generating website:", err);
+      console.error("❌ Error stack:", err.stack);
+      
+      const errorMessage = err.message || "An unknown error occurred";
+      console.error("❌ Final error message:", errorMessage);
+      
+      setError(errorMessage);
+      setIsGenerating(false);
+      
+      // Add error message to chat
+      setMessages(prev => [...prev, {
+        type: "claude_message",
+        content: `**❌ Error:** ${errorMessage}`
+      }]);
+      
+      // For debugging, let's add a mock success after 3 seconds if real generation fails
+      if (errorMessage.includes("API keys") || errorMessage.includes("500")) {
+        setTimeout(() => {
+          console.log("🎭 Adding mock success for debugging");
+          const mockSandboxId = "mock-sandbox-" + Date.now();
+          const mockPreviewUrl = "https://example.com"; // Mock URL for testing
+          
+          setMessages(prev => [...prev, {
+            type: "claude_message",
+            content: "**🎭 Mock:** This is a test response since the real API failed. In production, this would generate your website."
+          }]);
+          
+          setSandboxId(mockSandboxId);
+          setPreviewUrl(mockPreviewUrl);
+          setIsGenerating(false);
+          
+          if (user) {
+            saveProject(mockSandboxId, mockPreviewUrl);
+          }
+        }, 3000);
+      }
+    }
+  }, [prompt, existingSandboxId, user, isContinuing, saveProject]);
+
+  // Check authentication
   useEffect(() => {
-    if (!prompt) {
+    const currentUser = localStorage.getItem("lovable_current_user");
+    if (!currentUser) {
+      console.log("❌ No user found, redirecting to home");
       router.push("/");
       return;
     }
     
-    // Prevent double execution in StrictMode
-    if (hasStartedRef.current) {
+    try {
+      const userData = JSON.parse(currentUser);
+      console.log("✅ User loaded:", userData);
+      setUser(userData);
+    } catch (e) {
+      console.error("❌ Failed to parse user data:", e);
+      router.push("/");
       return;
     }
-    hasStartedRef.current = true;
     
-    setIsGenerating(true);
-    generateWebsite();
+    if (!prompt) {
+      console.log("❌ No prompt found, redirecting to home");
+      router.push("/");
+      return;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompt, router]);
   
-  const generateWebsite = async () => {
+  // Start generation when user is set (only for new projects)
+  useEffect(() => {
+    if (!user || !prompt || hasStartedRef.current || isContinuing) {
+      return;
+    }
+    
+    console.log("🚀 Starting generation with user:", user.name);
+    hasStartedRef.current = true;
+    
+    // Start generation
+    setTimeout(() => {
+      setIsGenerating(true);
+      
+      // First test the API
+      fetch('/api/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test: 'connection' })
+      })
+      .then(res => res.json())
+      .then(data => {
+        console.log('🧪 API test result:', data);
+        generateWebsite();
+      })
+      .catch(err => {
+        console.error('🧪 API test failed:', err);
+        generateWebsite(); // Try anyway
+      });
+    }, 100);
+  }, [user, prompt, isContinuing, generateWebsite]);
+  
+  // Handle project continuation
+  useEffect(() => {
+    if (user && isContinuing && existingSandboxId && prompt) {
+      console.log("🔄 Continuing existing project:", existingSandboxId);
+      
+      // For existing projects, we should get the actual preview URL
+      // For now, construct a preview URL based on the sandbox ID pattern
+      const projectPreviewUrl = user.projects.find(p => p.sandboxId === existingSandboxId)?.previewUrl;
+      
+      if (projectPreviewUrl) {
+        setPreviewUrl(projectPreviewUrl);
+      } else {
+        // If no preview URL is saved, we can attempt to construct one or fetch it
+        console.log("⚠️ No preview URL found for existing project, using placeholder");
+        setPreviewUrl("https://example.com/existing-project");
+      }
+      
+      setSandboxId(existingSandboxId);
+      
+      // Add welcome message for continuation with more helpful context
+      setMessages([{
+        type: "claude_message",
+        content: "**🔄 RAJAT:** Welcome back! Your existing project has been loaded and is ready for modifications.\n\n**Original prompt:** " + prompt + "\n\nYou can now ask me to make changes, add features, or fix any issues with your project. What would you like to do?"
+      }]);
+      
+      // Set generating to false since we're not generating, just loading
+      setIsGenerating(false);
+      setError(null);
+    }
+  }, [user, isContinuing, existingSandboxId, prompt]);
+
+  const formatToolInput = (input: any) => {
+    if (!input) return "";
+    
+    // Extract key information based on tool type - keep it short
+    if (input.file_path) {
+      const fileName = input.file_path.split('/').pop();
+      return fileName || input.file_path;
+    } else if (input.command) {
+      // Show only first part of command
+      return input.command.split(' ')[0];
+    } else if (input.pattern) {
+      return input.pattern;
+    } else if (input.prompt) {
+      return `${input.prompt.substring(0, 30)}...`;
+    }
+    
+    return "";
+  };
+
+  const renderMarkdown = (text: string) => {
+    return text
+      .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold text-white mb-2">$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-white mb-2">$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-white mb-3">$1</h1>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em class="text-gray-300 italic">$1</em>')
+      .replace(/`(.*?)`/g, '<code class="bg-gray-700 text-green-400 px-1 py-0.5 rounded text-sm font-mono">$1</code>')
+      .replace(/^- (.*$)/gim, '<li class="text-gray-300 ml-4">• $1</li>')
+      .replace(/^\* (.*$)/gim, '<li class="text-gray-300 ml-4">• $1</li>')
+      .replace(/\n/g, '<br>');
+  };
+
+  const getImportantMessage = (message: Message) => {
+    if (message.type === "claude_message") {
+      const content = message.content || "";
+      const lowerContent = content.toLowerCase();
+      
+      // Show all Claude messages for better visibility
+      if (content.includes("🚀 RAJAT:") || content.includes("❌ Error:") || content.includes("🎭 Mock:")) {
+        return content; // Show system messages as-is
+      }
+      
+      // Show progress messages
+      if (lowerContent.includes("creating") || lowerContent.includes("generating") || 
+          lowerContent.includes("setting up") || lowerContent.includes("configuring") ||
+          lowerContent.includes("installing") || lowerContent.includes("downloading") ||
+          lowerContent.includes("starting") || lowerContent.includes("building") ||
+          lowerContent.includes("sandbox") || lowerContent.includes("server") ||
+          lowerContent.includes("preview") || lowerContent.includes("ready")) {
+        return `**🛠️ Progress:** ${content}`;
+      }
+      
+      // Show all other Claude messages
+      return content;
+    }
+    
+    if (message.type === "progress") {
+      return `**📝 Status:** ${message.message}`;
+    }
+    
+    return null;
+  };
+
+  const addPreviewMessage = (text: string) => {
+    const newMessage: PreviewMessage = {
+      id: `preview-${previewMessageIdRef.current++}`,
+      text,
+      timestamp: Date.now()
+    };
+    setPreviewMessages(prev => [...prev, newMessage]);
+    
+    // Remove message after animation completes (4 seconds)
+    setTimeout(() => {
+      setPreviewMessages(prev => prev.filter(msg => msg.id !== newMessage.id));
+    }, 4000);
+  };
+
+  // Add preview messages during generation with looping
+  useEffect(() => {
+    if (isGenerating && !previewUrl) {
+      const messages = [
+        "🚀 Initializing sandbox environment...",
+        "📦 Downloading Next.js framework...",
+        "⚙️ Installing dependencies...",
+        "🔧 Configuring TypeScript...",
+        "🎨 Setting up Tailwind CSS...",
+        "📝 Generating project structure...",
+        "🔄 Optimizing build configuration...",
+        "🌐 Starting development server...",
+        "⚡ Warming up modules...",
+        "🔍 Running health checks...",
+        "✨ Finalizing setup..."
+      ];
+      
+      let messageIndex = 0;
+      const interval = setInterval(() => {
+        if (isGenerating && !previewUrl) {
+          addPreviewMessage(messages[messageIndex % messages.length]);
+          messageIndex++;
+        } else {
+          clearInterval(interval);
+        }
+      }, 1200); // Slower timing for smoother effect
+      
+      return () => clearInterval(interval);
+    }
+  }, [isGenerating, previewUrl]);
+
+  const handleFollowUpSubmit = async () => {
+    if (!followUpInput.trim() || isGenerating || !sandboxId) return;
+
+    const userMessage: Message = {
+      type: "claude_message",
+      content: `**🤖 You:** ${followUpInput}`
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
+    setFollowUpInput("");
+    setIsGenerating(true);
+
     try {
       const response = await fetch("/api/generate-daytona", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ 
+          prompt: followUpInput,
+          sandboxId: sandboxId,
+          isFollowUp: true
+        }),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate website");
+        throw new Error(errorData.error || "Failed to process follow-up");
       }
 
       const reader = response.body?.getReader();
@@ -96,7 +511,6 @@ export default function GeneratePage() {
               if (message.type === "error") {
                 throw new Error(message.message);
               } else if (message.type === "complete") {
-                setPreviewUrl(message.previewUrl || null);
                 setIsGenerating(false);
               } else {
                 setMessages((prev) => [...prev, message]);
@@ -108,153 +522,284 @@ export default function GeneratePage() {
         }
       }
     } catch (err: any) {
-      console.error("Error generating website:", err);
+      console.error("Error processing follow-up:", err);
       setError(err.message || "An error occurred");
       setIsGenerating(false);
     }
   };
   
-  const formatToolInput = (input: any) => {
-    if (!input) return "";
+  const generateProjectName = (prompt: string): string => {
+    // Generate a friendly project name from the prompt
+    const words = prompt.toLowerCase().match(/\b\w+\b/g) || [];
+    const importantWords = words.filter(word => 
+      !['a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'create', 'make', 'build'].includes(word)
+    );
     
-    // Extract key information based on tool type
-    if (input.file_path) {
-      return `File: ${input.file_path}`;
-    } else if (input.command) {
-      return `Command: ${input.command}`;
-    } else if (input.pattern) {
-      return `Pattern: ${input.pattern}`;
-    } else if (input.prompt) {
-      return `Prompt: ${input.prompt.substring(0, 100)}...`;
+    if (importantWords.length === 0) {
+      return "My Website";
     }
     
-    // For other cases, show first meaningful field
-    const keys = Object.keys(input);
-    if (keys.length > 0) {
-      const firstKey = keys[0];
-      const value = input[firstKey];
-      if (typeof value === 'string' && value.length > 100) {
-        return `${firstKey}: ${value.substring(0, 100)}...`;
-      }
-      return `${firstKey}: ${value}`;
-    }
+    const name = importantWords.slice(0, 3).map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
     
-    return JSON.stringify(input).substring(0, 100) + "...";
+    return name.length > 30 ? name.substring(0, 30) + '...' : name;
   };
 
-  return (
-    <main className="h-screen bg-black flex flex-col overflow-hidden relative">
-      <Navbar />
-      {/* Spacer for navbar */}
-      <div className="h-16" />
-      
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left side - Chat */}
-        <div className="w-[30%] flex flex-col border-r border-gray-800">
-          {/* Header */}
-          <div className="p-4 border-b border-gray-800">
-            <h2 className="text-white font-semibold">Lovable</h2>
-            <p className="text-gray-400 text-sm mt-1 break-words">{prompt}</p>
+  // Left Panel Component
+  const LeftPanel = () => (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900/50">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-sm">R</span>
           </div>
-          
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 overflow-x-hidden">
-            {messages.map((message, index) => (
-              <div key={index}>
-                {message.type === "claude_message" && (
-                  <div className="bg-gray-900 rounded-lg p-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-6 h-6 bg-purple-600 rounded-full flex items-center justify-center">
-                        <span className="text-white text-xs">L</span>
-                      </div>
-                      <span className="text-white font-medium">Lovable</span>
-                    </div>
-                    <p className="text-gray-300 whitespace-pre-wrap break-words">{message.content}</p>
-                  </div>
-                )}
-                
-                {message.type === "tool_use" && (
-                  <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-800 overflow-hidden">
-                    <div className="flex items-start gap-2 text-sm">
-                      <span className="text-blue-400 flex-shrink-0">🔧 {message.name}</span>
-                      <span className="text-gray-500 break-all">{formatToolInput(message.input)}</span>
-                    </div>
-                  </div>
-                )}
-                
-                {message.type === "progress" && (
-                  <div className="text-gray-500 text-sm font-mono break-all">
-                    {message.message}
-                  </div>
-                )}
-              </div>
-            ))}
-            
-            {isGenerating && (
-              <div className="flex items-center gap-2 text-gray-400">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
-                <span>Working...</span>
-              </div>
-            )}
-            
-            {error && (
-              <div className="bg-red-900/20 border border-red-700 rounded-lg p-4">
-                <p className="text-red-400">{error}</p>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </div>
-          
-          {/* Bottom input area */}
-          <div className="p-4 border-t border-gray-800">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Ask Lovable..."
-                className="flex-1 px-4 py-2 bg-gray-900 text-white rounded-lg border border-gray-800 focus:outline-none focus:border-gray-700"
-                disabled={isGenerating}
-              />
-              <button className="p-2 text-gray-400 hover:text-gray-300">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-              </button>
-              <button className="p-2 text-gray-400 hover:text-gray-300">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
-              </button>
-            </div>
+          <div>
+            <h2 className="text-white font-semibold">RAJAT AI</h2>
+            <p className="text-gray-400 text-xs">Building your project</p>
           </div>
         </div>
-        
-        {/* Right side - Preview */}
-        <div className="w-[70%] bg-gray-950 flex items-center justify-center">
-          {!previewUrl && isGenerating && (
-            <div className="text-center">
-              <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mb-4">
-                <div className="w-12 h-12 bg-gray-700 rounded-xl animate-pulse"></div>
+        <button
+          onClick={() => router.push('/')}
+          className="px-3 py-1 text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Dashboard
+        </button>
+      </div>
+      
+      {/* Project Info */}
+      <div className="p-4 bg-gray-800/30 border-b border-gray-700">
+        <p className="text-gray-300 text-sm break-words leading-relaxed">{prompt}</p>
+        {user && (
+          <div className="mt-2 flex items-center gap-2">
+            <div className="w-4 h-4 bg-green-500 rounded-full" />
+            <span className="text-xs text-gray-400">{user.name}</span>
+          </div>
+        )}
+      </div>
+      
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto chat-scroll">
+        <div className="p-4 space-y-3">
+          {messages.map((message, index) => {
+            const importantMessage = getImportantMessage(message);
+            
+            return (
+              <div key={index} className="message-fade-in">
+                {message.type === "claude_message" && (importantMessage || message.content?.includes("🤖 You:")) && (
+                  <div className={`rounded-xl p-4 border transition-all duration-200 hover:shadow-lg ${
+                    message.content?.includes("🤖 You:") 
+                      ? "bg-blue-900/40 border-blue-700/50 ml-6" 
+                      : "bg-gray-800/60 border-gray-600/50"
+                  }`}>
+                    <div className="flex items-center gap-3 mb-3">
+                      {message.content?.includes("🤖 You:") ? (
+                        <>
+                          <div className="w-6 h-6 bg-gradient-to-r from-blue-400 to-cyan-400 rounded-full flex items-center justify-center">
+                            <span className="text-white text-xs font-bold">U</span>
+                          </div>
+                          <span className="text-blue-100 text-sm font-medium">You</span>
+                        </>
+                      ) : (
+                        <>
+                          <div className="w-6 h-6 bg-gradient-to-r from-purple-400 to-blue-400 rounded-full flex items-center justify-center">
+                            <span className="text-white text-xs font-bold">R</span>
+                          </div>
+                          <span className="text-purple-100 text-sm font-medium">RAJAT</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="text-gray-100 text-sm leading-relaxed" dangerouslySetInnerHTML={{
+                      __html: renderMarkdown(message.content?.includes("🤖 You:") ? message.content : importantMessage || "")
+                    }} />
+                  </div>
+                )}
               </div>
-              <p className="text-gray-400">Spinning up preview...</p>
+            );
+          })}
+          
+          {isGenerating && (
+            <div className="flex items-center gap-3 text-gray-400 p-4 bg-gray-800/30 rounded-xl">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-400"></div>
+              <span className="text-sm">AI is working<span className="loading-dots"></span></span>
             </div>
           )}
           
-          {previewUrl && (
-            <iframe
-              src={previewUrl}
-              className="w-full h-full"
-              title="Website Preview"
-            />
-          )}
-          
-          {!previewUrl && !isGenerating && (
-            <div className="text-center">
-              <p className="text-gray-400">Preview will appear here</p>
+          {error && (
+            <div className="bg-red-900/30 border border-red-600/50 rounded-xl p-4">
+              <p className="text-red-300 text-sm">{error}</p>
             </div>
           )}
+          
+          <div ref={messagesEndRef} />
         </div>
       </div>
+      
+      {/* Input Area */}
+      <div className="p-4 border-t border-gray-700 bg-gray-900/30">
+        <div className="relative">
+          <input
+            type="text"
+            value={followUpInput}
+            onChange={(e) => setFollowUpInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleFollowUpSubmit();
+              }
+            }}
+            placeholder={previewUrl ? "Ask for changes to your website..." : "Ask RAJAT..."}
+            className="w-full px-4 py-3 pr-12 bg-gray-800/60 text-white rounded-xl border border-gray-600 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 disabled:opacity-50 transition-all duration-200"
+            disabled={isGenerating || (!previewUrl && !sandboxId)}
+          />
+          <button 
+            onClick={handleFollowUpSubmit}
+            disabled={!followUpInput.trim() || isGenerating || (!previewUrl && !sandboxId)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 hover:bg-gray-700 rounded-lg"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
+          </button>
+        </div>
+        {previewUrl && (
+          <div className="mt-3 p-3 bg-gray-800/40 rounded-lg border border-gray-600/30">
+            <p className="text-xs text-gray-400 leading-relaxed">
+              💡 <strong>Tip:</strong> You can ask for changes like "Add a contact form", "Change colors to blue", or "Make it mobile responsive"
+            </p>
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  // Right Panel Component
+  const RightPanel = () => (
+    <div className="h-full flex flex-col bg-gray-800">
+      {/* Preview Header */}
+      <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800/50">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+          <span className="text-gray-300 text-sm font-medium">
+            {previewUrl ? "Live Preview" : isGenerating ? "Generating..." : "Preview"}
+          </span>
+        </div>
+        {previewUrl && (
+          <a
+            href={previewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors flex items-center gap-1"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            Open in New Tab
+          </a>
+        )}
+      </div>
+      
+      {/* Preview Content */}
+      <div className="flex-1 relative">
+        {!previewUrl && isGenerating && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="w-24 h-24 bg-gradient-to-br from-gray-600/50 to-gray-800/50 rounded-3xl flex items-center justify-center mb-8 animate-wobbleGlow backdrop-blur-sm">
+              <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-500 rounded-2xl animate-pulse flex items-center justify-center">
+                <div className="w-10 h-10 bg-white/20 rounded-xl animate-spin">
+                  <div className="w-3 h-3 bg-white rounded-full m-1"></div>
+                </div>
+              </div>
+            </div>
+            
+            <div className="relative bg-gray-700/20 backdrop-blur-md rounded-2xl p-6 w-[480px] h-48 overflow-hidden border border-gray-600/30">
+              <div className="absolute inset-6 flex flex-col justify-end overflow-hidden">
+                {previewMessages.slice(-6).map((msg, index) => (
+                  <div
+                    key={msg.id}
+                    className="text-green-300 text-sm font-mono py-1.5 animate-smoothSlideUp flex items-center gap-2"
+                    style={{
+                      animationDelay: `${index * 0.1}s`,
+                      animationDuration: '4s',
+                      animationFillMode: 'forwards',
+                      opacity: 1 - (index * 0.12)
+                    }}
+                  >
+                    <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                    {msg.text}
+                  </div>
+                ))}
+              </div>
+              <div className="absolute top-0 left-0 right-0 h-12 bg-gradient-to-b from-gray-700/20 via-gray-700/10 to-transparent pointer-events-none" />
+              <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-gray-700/20 to-transparent pointer-events-none" />
+            </div>
+          </div>
+        )}
+        
+        {previewUrl && (
+          <iframe
+            src={previewUrl}
+            className="w-full h-full border-0"
+            title="Website Preview"
+          />
+        )}
+        
+        {!previewUrl && !isGenerating && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="w-16 h-16 bg-gray-700/50 rounded-2xl flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            </div>
+            <p className="text-gray-400 text-center">Your website preview will appear here</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <main className="h-screen bg-black flex flex-col overflow-hidden">
+      <ResizablePanels
+        leftPanel={<LeftPanel />}
+        rightPanel={<RightPanel />}
+        initialLeftWidth={35}
+        minLeftWidth={25}
+        maxLeftWidth={60}
+      />
     </main>
   );
+}
+
+// CSS animations
+const styles = `
+  @keyframes slideUpFade {
+    0% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    90% {
+      opacity: 1;
+      transform: translateY(-10px);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+  }
+  
+  .animate-slideUpFade {
+    animation: slideUpFade 3s ease-out forwards;
+  }
+`;
+
+// Inject styles
+if (typeof document !== 'undefined') {
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = styles;
+  document.head.appendChild(styleSheet);
 }
