@@ -6,11 +6,12 @@ export async function POST(req: NextRequest) {
   try {
     console.log("🔄 API: Starting generation request");
     
-    const { prompt, sandboxId, isFollowUp } = await req.json();
+    const { prompt, sandboxId, isFollowUp, model } = await req.json();
     
     console.log("📝 API: Received prompt:", prompt);
     console.log("📦 API: Received sandboxId:", sandboxId);
     console.log("🔄 API: isFollowUp:", isFollowUp);
+    console.log("🤖 API: Selected model:", model);
     
     if (!prompt) {
       console.error("❌ API: No prompt provided");
@@ -20,14 +21,12 @@ export async function POST(req: NextRequest) {
       );
     }
     
-    if (!process.env.DAYTONA_API_KEY || !process.env.ANTHROPIC_API_KEY) {
-      console.error("❌ API: Missing required environment variables");
-      console.error("🔑 DAYTONA_API_KEY present:", !!process.env.DAYTONA_API_KEY);
-      console.error("🔑 ANTHROPIC_API_KEY present:", !!process.env.ANTHROPIC_API_KEY);
-      return new Response(
-        JSON.stringify({ error: "Missing API keys. Please check your environment variables." }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+    if ((model === 'claude' && !process.env.ANTHROPIC_API_KEY) || (model === 'chatgpt' && !process.env.OPENAI_API_KEY)) {
+        console.error(`❌ API: Missing API key for ${model}`);
+        return new Response(
+            JSON.stringify({ error: `Missing API key for ${model}. Please check your environment variables.` }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+        );
     }
     
     console.log(`[API] Starting ${isFollowUp ? 'follow-up' : 'initial'} generation for prompt:`, prompt);
@@ -38,18 +37,14 @@ export async function POST(req: NextRequest) {
       );
     }
     
-    // Create a streaming response
     const encoder = new TextEncoder();
     const stream = new TransformStream();
     const writer = stream.writable.getWriter();
     
-    // Start the async generation
     (async () => {
       try {
-        // Use the appropriate script based on request type
-        const scriptPath = isFollowUp 
-          ? path.join(process.cwd(), "scripts", "continue-in-daytona.ts")
-          : path.join(process.cwd(), "scripts", "generate-in-daytona.ts");
+        const scriptName = model === 'chatgpt' ? "generate-with-chatgpt.ts" : "generate-in-daytona.ts";
+        const scriptPath = path.join(process.cwd(), "scripts", scriptName);
         
         console.log("📄 API: Script path:", scriptPath);
         
@@ -66,6 +61,7 @@ export async function POST(req: NextRequest) {
             ...process.env,
             DAYTONA_API_KEY: process.env.DAYTONA_API_KEY,
             ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+            OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           },
         });
         
@@ -73,16 +69,14 @@ export async function POST(req: NextRequest) {
         let previewUrl = "";
         let buffer = "";
         
-        // Capture stdout
         child.stdout.on("data", async (data) => {
           buffer += data.toString();
           const lines = buffer.split('\n');
-          buffer = lines.pop() || ""; // Keep incomplete line in buffer
+          buffer = lines.pop() || "";
           
           for (const line of lines) {
             if (!line.trim()) continue;
             
-            // Parse Claude messages
             if (line.includes('__CLAUDE_MESSAGE__')) {
               const jsonStart = line.indexOf('__CLAUDE_MESSAGE__') + '__CLAUDE_MESSAGE__'.length;
               try {
@@ -94,10 +88,8 @@ export async function POST(req: NextRequest) {
                   })}\n\n`)
                 );
               } catch (e) {
-                // Ignore parse errors
               }
             }
-            // Parse tool uses
             else if (line.includes('__TOOL_USE__')) {
               const jsonStart = line.indexOf('__TOOL_USE__') + '__TOOL_USE__'.length;
               try {
@@ -110,25 +102,19 @@ export async function POST(req: NextRequest) {
                   })}\n\n`)
                 );
               } catch (e) {
-                // Ignore parse errors
               }
             }
-            // Parse tool results
             else if (line.includes('__TOOL_RESULT__')) {
-              // Skip tool results for now to reduce noise
               continue;
             }
-            // Regular progress messages
             else {
               const output = line.trim();
               
-              // Filter out internal logs
               if (output && 
                   !output.includes('[Claude]:') && 
                   !output.includes('[Tool]:') &&
                   !output.includes('__')) {
                 
-                // Send as progress
                 await writer.write(
                   encoder.encode(`data: ${JSON.stringify({ 
                     type: "progress", 
@@ -136,13 +122,11 @@ export async function POST(req: NextRequest) {
                   })}\n\n`)
                 );
                 
-                // Extract sandbox ID
                 const sandboxMatch = output.match(/Sandbox created: ([a-f0-9-]+)/);
                 if (sandboxMatch) {
                   responseSandboxId = sandboxMatch[1];
                 }
                 
-                // Extract preview URL
                 const previewMatch = output.match(/Preview URL: (https:\/\/[^\s]+)/);
                 if (previewMatch) {
                   previewUrl = previewMatch[1];
@@ -152,12 +136,10 @@ export async function POST(req: NextRequest) {
           }
         });
         
-        // Capture stderr
         child.stderr.on("data", async (data) => {
           const error = data.toString();
           console.error("[Daytona Error]:", error);
           
-          // Only send actual errors, not debug info
           if (error.includes("Error") || error.includes("Failed")) {
             await writer.write(
               encoder.encode(`data: ${JSON.stringify({ 
@@ -168,7 +150,6 @@ export async function POST(req: NextRequest) {
           }
         });
         
-        // Wait for process to complete
         await new Promise((resolve, reject) => {
           child.on("exit", (code) => {
             console.log(`🏁 API: Process exited with code ${code}`);
@@ -185,7 +166,6 @@ export async function POST(req: NextRequest) {
           });
         });
         
-        // Send completion with preview URL
         if (previewUrl) {
           await writer.write(
             encoder.encode(`data: ${JSON.stringify({ 
@@ -199,7 +179,6 @@ export async function POST(req: NextRequest) {
           throw new Error("Failed to get preview URL");
         }
         
-        // Send done signal
         await writer.write(encoder.encode("data: [DONE]\n\n"));
       } catch (error: any) {
         console.error("[API] Error during generation:", error);

@@ -2,10 +2,11 @@ import { Daytona } from "@daytonaio/sdk";
 import * as dotenv from "dotenv";
 import * as path from "path";
 
-// Load environment variables
 dotenv.config({ path: path.join(__dirname, "../../.env") });
 
 async function removeSandbox(sandboxId: string) {
+  console.log(`🔥 Deleting sandbox: ${sandboxId}`);
+
   if (!process.env.DAYTONA_API_KEY) {
     console.error("ERROR: DAYTONA_API_KEY must be set");
     process.exit(1);
@@ -16,24 +17,22 @@ async function removeSandbox(sandboxId: string) {
   });
 
   try {
-    console.log(`Removing sandbox: ${sandboxId}...`);
-    await daytona.remove(sandboxId);
-    console.log("✓ Sandbox removed successfully");
+    await daytona.delete(sandboxId);
+    console.log(`✓ Sandbox ${sandboxId} deleted`);
   } catch (error: any) {
-    console.error("Failed to remove sandbox:", error.message);
+    console.error(`❌ ERROR: ${error.message}`);
     process.exit(1);
   }
 }
 
-// Main execution
 async function main() {
-  const sandboxId = process.argv[2];
-  
-  if (!sandboxId) {
-    console.error("Usage: npx tsx scripts/remove-sandbox.ts <sandbox-id>");
+  const args = process.argv.slice(2);
+  if (args.length !== 1) {
+    console.error("Usage: tsx scripts/remove-sandbox.ts <sandbox-id>");
     process.exit(1);
   }
 
+  const sandboxId = args[0];
   await removeSandbox(sandboxId);
 }
 

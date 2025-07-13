@@ -24,6 +24,7 @@ interface DashboardProps {
 export default function Dashboard({ user, onLogout }: DashboardProps) {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
+  const [selectedModel, setSelectedModel] = useState('claude');
 
   const handleContinueProject = (project: any) => {
     // Navigate to generate page with existing sandbox
@@ -32,8 +33,48 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
   const handleNewProject = () => {
     if (!prompt.trim()) return;
-    // Navigate to generate page with new prompt
-    router.push(`/generate?prompt=${encodeURIComponent(prompt)}`);
+    // Navigate to generate page with new prompt and selected model
+    router.push(`/generate?prompt=${encodeURIComponent(prompt)}&model=${selectedModel}`);
+  };
+
+  const handleDeleteProject = async (project: any) => {
+    if (!window.confirm(`Are you sure you want to delete the project "${project.name}"?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/delete-project", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sandboxId: project.sandboxId, userId: user.email }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to delete project");
+      }
+
+      // Remove project from user's projects
+      const updatedProjects = user.projects.filter((p) => p.id !== project.id);
+      const updatedUser = { ...user, projects: updatedProjects };
+
+      // Update user data in local storage
+      localStorage.setItem("lovable_current_user", JSON.stringify(updatedUser));
+
+      // Update users database in local storage
+      const users = JSON.parse(localStorage.getItem("lovable_users") || "{}");
+      if (users[user.email]) {
+        users[user.email].projects = updatedProjects;
+        localStorage.setItem("lovable_users", JSON.stringify(users));
+      }
+
+      // Update the UI
+      window.location.reload();
+    } catch (error: any) {
+      alert(error.message);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -115,6 +156,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             </div>
           </div>
 
+          {/* Model Selector */}
+          <div className="flex items-center justify-center gap-4 mb-12">
+            <button onClick={() => setSelectedModel('claude')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'claude' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Claude</button>
+            <button onClick={() => setSelectedModel('chatgpt')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'chatgpt' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>ChatGPT</button>
+          </div>
+
           {/* Existing Projects */}
           {user.projects.length > 0 ? (
             <div>
@@ -159,6 +206,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                           {project.previewUrl && (
                             <a href={project.previewUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">View</a>
                           )}
+                          <button onClick={() => handleDeleteProject(project)} className="text-red-400 hover:text-red-300 ml-4">Delete</button>
                         </td>
                       </tr>
                     ))}

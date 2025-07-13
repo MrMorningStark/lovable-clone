@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ResizablePanels from "@/components/ResizablePanels";
+import React from "react";
 
 interface User {
   email: string;
@@ -34,336 +35,8 @@ interface PreviewMessage {
   timestamp: number;
 }
 
-export default function GeneratePage() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const prompt = searchParams.get("prompt") || "";
-  const existingSandboxId = searchParams.get("sandboxId") || null;
-  const isContinuing = searchParams.get("continue") === "true";
-  
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [previewMessages, setPreviewMessages] = useState<PreviewMessage[]>([]);
-  const [followUpInput, setFollowUpInput] = useState("");
-  const [sandboxId, setSandboxId] = useState<string | null>(existingSandboxId);
-  const [user, setUser] = useState<User | null>(null);
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const hasStartedRef = useRef(false);
-  const previewMessageIdRef = useRef(0);
-  
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-  
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-  
-  // Define functions first
-  const saveProject = useCallback((sandboxId: string, previewUrl: string | null) => {
-    if (!user) return;
-    
-    try {
-      const projectId = Date.now().toString();
-      const projectName = generateProjectName(prompt);
-      
-      const newProject = {
-        id: projectId,
-        name: projectName,
-        prompt,
-        sandboxId,
-        previewUrl: previewUrl || "",
-        createdAt: new Date().toISOString()
-      };
-      
-      // Update user data
-      const updatedUser = {
-        ...user,
-        projects: [...user.projects, newProject]
-      };
-      
-      // Save to localStorage
-      localStorage.setItem("lovable_current_user", JSON.stringify(updatedUser));
-      
-      // Update users database
-      const users = JSON.parse(localStorage.getItem("lovable_users") || "{}");
-      if (users[user.email]) {
-        users[user.email].projects = updatedUser.projects;
-        localStorage.setItem("lovable_users", JSON.stringify(users));
-      }
-      
-      setUser(updatedUser);
-      setCurrentProjectId(projectId);
-      
-      console.log("Project saved:", newProject);
-    } catch (error) {
-      console.error("Failed to save project:", error);
-    }
-  }, [user, prompt]);
-
-  const generateWebsite = useCallback(async () => {
-    try {
-      console.log("🚀 Starting generation with prompt:", prompt);
-      console.log("📦 Existing sandbox ID:", existingSandboxId);
-      console.log("👤 User:", user);
-      
-      // Add a message to show generation started
-      setMessages(prev => [...prev, {
-        type: "claude_message",
-        content: "**🚀 RAJAT:** Starting to generate your website..."
-      }]);
-      
-      const requestBody = { 
-        prompt,
-        sandboxId: existingSandboxId,
-        isFollowUp: false
-      };
-      
-      console.log("📤 Sending request body:", requestBody);
-      
-      const response = await fetch("/api/generate-daytona", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-      
-      console.log("📬 Response status:", response.status);
-      console.log("📬 Response headers:", Object.fromEntries(response.headers.entries()));
-
-      if (!response.ok) {
-        let errorMessage;
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
-          console.error("❌ API Error Data:", errorData);
-        } catch (e) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          console.error("❌ Failed to parse error response:", e);
-        }
-        throw new Error(errorMessage);
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error("No response body");
-      }
-
-      console.log("📖 Starting to read response stream...");
-      let messageCount = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          console.log("✅ Stream reading completed");
-          break;
-        }
-
-        const chunk = decoder.decode(value);
-        console.log("📦 Received chunk:", chunk);
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            console.log("📥 Processing data line:", data);
-
-            if (data === "[DONE]") {
-              console.log("🏁 Received DONE signal");
-              setIsGenerating(false);
-              break;
-            }
-
-            try {
-              const message = JSON.parse(data) as Message;
-              messageCount++;
-              console.log(`📨 Message ${messageCount}:`, message);
-              
-              if (message.type === "error") {
-                console.error("❌ Error message received:", message.message);
-                throw new Error(message.message);
-              } else if (message.type === "complete") {
-                const newPreviewUrl = message.previewUrl || null;
-                const newSandboxId = message.sandboxId || null;
-                
-                console.log("🎉 Generation complete!");
-                console.log("🔗 Preview URL:", newPreviewUrl);
-                console.log("📦 Sandbox ID:", newSandboxId);
-                
-                setPreviewUrl(newPreviewUrl);
-                setSandboxId(newSandboxId);
-                setIsGenerating(false);
-                
-                // Save project for new generations (not follow-ups)
-                if (newSandboxId && !isContinuing && user) {
-                  console.log("💾 Saving project...");
-                  saveProject(newSandboxId, newPreviewUrl);
-                }
-              } else {
-                console.log("💬 Adding message to chat:", message);
-                setMessages((prev) => [...prev, message]);
-              }
-            } catch (e) {
-              console.warn("⚠️ Failed to parse message:", data, e);
-            }
-          }
-        }
-      }
-    } catch (err: any) {
-      console.error("❌ Error generating website:", err);
-      console.error("❌ Error stack:", err.stack);
-      
-      const errorMessage = err.message || "An unknown error occurred";
-      console.error("❌ Final error message:", errorMessage);
-      
-      setError(errorMessage);
-      setIsGenerating(false);
-      
-      // Add error message to chat
-      setMessages(prev => [...prev, {
-        type: "claude_message",
-        content: `**❌ Error:** ${errorMessage}`
-      }]);
-      
-      // For debugging, let's add a mock success after 3 seconds if real generation fails
-      if (errorMessage.includes("API keys") || errorMessage.includes("500")) {
-        setTimeout(() => {
-          console.log("🎭 Adding mock success for debugging");
-          const mockSandboxId = "mock-sandbox-" + Date.now();
-          const mockPreviewUrl = "https://example.com"; // Mock URL for testing
-          
-          setMessages(prev => [...prev, {
-            type: "claude_message",
-            content: "**🎭 Mock:** This is a test response since the real API failed. In production, this would generate your website."
-          }]);
-          
-          setSandboxId(mockSandboxId);
-          setPreviewUrl(mockPreviewUrl);
-          setIsGenerating(false);
-          
-          if (user) {
-            saveProject(mockSandboxId, mockPreviewUrl);
-          }
-        }, 3000);
-      }
-    }
-  }, [prompt, existingSandboxId, user, isContinuing, saveProject]);
-
-  // Check authentication
-  useEffect(() => {
-    const currentUser = localStorage.getItem("lovable_current_user");
-    if (!currentUser) {
-      console.log("❌ No user found, redirecting to home");
-      router.push("/");
-      return;
-    }
-    
-    try {
-      const userData = JSON.parse(currentUser);
-      console.log("✅ User loaded:", userData);
-      setUser(userData);
-    } catch (e) {
-      console.error("❌ Failed to parse user data:", e);
-      router.push("/");
-      return;
-    }
-    
-    if (!prompt) {
-      console.log("❌ No prompt found, redirecting to home");
-      router.push("/");
-      return;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt, router]);
-  
-  // Start generation when user is set (only for new projects)
-  useEffect(() => {
-    if (!user || !prompt || hasStartedRef.current || isContinuing) {
-      return;
-    }
-    
-    console.log("🚀 Starting generation with user:", user.name);
-    hasStartedRef.current = true;
-    
-    // Start generation
-    setTimeout(() => {
-      setIsGenerating(true);
-      
-      // First test the API
-      fetch('/api/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test: 'connection' })
-      })
-      .then(res => res.json())
-      .then(data => {
-        console.log('🧪 API test result:', data);
-        generateWebsite();
-      })
-      .catch(err => {
-        console.error('🧪 API test failed:', err);
-        generateWebsite(); // Try anyway
-      });
-    }, 100);
-  }, [user, prompt, isContinuing, generateWebsite]);
-  
-  // Handle project continuation
-  useEffect(() => {
-    if (user && isContinuing && existingSandboxId && prompt) {
-      console.log("🔄 Continuing existing project:", existingSandboxId);
-      
-      // For existing projects, we should get the actual preview URL
-      // For now, construct a preview URL based on the sandbox ID pattern
-      const projectPreviewUrl = user.projects.find(p => p.sandboxId === existingSandboxId)?.previewUrl;
-      
-      if (projectPreviewUrl) {
-        setPreviewUrl(projectPreviewUrl);
-      } else {
-        // If no preview URL is saved, we can attempt to construct one or fetch it
-        console.log("⚠️ No preview URL found for existing project, using placeholder");
-        setPreviewUrl("https://example.com/existing-project");
-      }
-      
-      setSandboxId(existingSandboxId);
-      
-      // Add welcome message for continuation with more helpful context
-      setMessages([{
-        type: "claude_message",
-        content: "**🔄 RAJAT:** Welcome back! Your existing project has been loaded and is ready for modifications.\n\n**Original prompt:** " + prompt + "\n\nYou can now ask me to make changes, add features, or fix any issues with your project. What would you like to do?"
-      }]);
-      
-      // Set generating to false since we're not generating, just loading
-      setIsGenerating(false);
-      setError(null);
-    }
-  }, [user, isContinuing, existingSandboxId, prompt]);
-
-  const formatToolInput = (input: any) => {
-    if (!input) return "";
-    
-    // Extract key information based on tool type - keep it short
-    if (input.file_path) {
-      const fileName = input.file_path.split('/').pop();
-      return fileName || input.file_path;
-    } else if (input.command) {
-      // Show only first part of command
-      return input.command.split(' ')[0];
-    } else if (input.pattern) {
-      return input.pattern;
-    } else if (input.prompt) {
-      return `${input.prompt.substring(0, 30)}...`;
-    }
-    
-    return "";
-  };
-
-  const renderMarkdown = (text: string) => {
+const renderMarkdown = (text: string) => {
+    if (!text) return "";
     return text
       .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold text-white mb-2">$1</h3>')
       .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-white mb-2">$1</h2>')
@@ -374,19 +47,17 @@ export default function GeneratePage() {
       .replace(/^- (.*$)/gim, '<li class="text-gray-300 ml-4">• $1</li>')
       .replace(/^\* (.*$)/gim, '<li class="text-gray-300 ml-4">• $1</li>')
       .replace(/\n/g, '<br>');
-  };
+};
 
-  const getImportantMessage = (message: Message) => {
-    if (message.type === "claude_message") {
-      const content = message.content || "";
+const getImportantMessage = (message: Message) => {
+    if (message.type === "claude_message" || message.type === "progress") {
+      const content = message.content || message.message || "";
       const lowerContent = content.toLowerCase();
       
-      // Show all Claude messages for better visibility
-      if (content.includes("🚀 RAJAT:") || content.includes("❌ Error:") || content.includes("🎭 Mock:")) {
-        return content; // Show system messages as-is
+      if (content.includes("🚀 RAJAT:") || content.includes("❌ Error:") || content.includes("🎭 Mock:") || content.includes("🤖 You:")) {
+        return content;
       }
       
-      // Show progress messages
       if (lowerContent.includes("creating") || lowerContent.includes("generating") || 
           lowerContent.includes("setting up") || lowerContent.includes("configuring") ||
           lowerContent.includes("installing") || lowerContent.includes("downloading") ||
@@ -396,158 +67,30 @@ export default function GeneratePage() {
         return `**🛠️ Progress:** ${content}`;
       }
       
-      // Show all other Claude messages
       return content;
     }
     
-    if (message.type === "progress") {
-      return `**📝 Status:** ${message.message}`;
-    }
-    
     return null;
-  };
+};
 
-  const addPreviewMessage = (text: string) => {
-    const newMessage: PreviewMessage = {
-      id: `preview-${previewMessageIdRef.current++}`,
-      text,
-      timestamp: Date.now()
-    };
-    setPreviewMessages(prev => [...prev, newMessage]);
-    
-    // Remove message after animation completes (4 seconds)
-    setTimeout(() => {
-      setPreviewMessages(prev => prev.filter(msg => msg.id !== newMessage.id));
-    }, 4000);
-  };
-
-  // Add preview messages during generation with looping
-  useEffect(() => {
-    if (isGenerating && !previewUrl) {
-      const messages = [
-        "🚀 Initializing sandbox environment...",
-        "📦 Downloading Next.js framework...",
-        "⚙️ Installing dependencies...",
-        "🔧 Configuring TypeScript...",
-        "🎨 Setting up Tailwind CSS...",
-        "📝 Generating project structure...",
-        "🔄 Optimizing build configuration...",
-        "🌐 Starting development server...",
-        "⚡ Warming up modules...",
-        "🔍 Running health checks...",
-        "✨ Finalizing setup..."
-      ];
-      
-      let messageIndex = 0;
-      const interval = setInterval(() => {
-        if (isGenerating && !previewUrl) {
-          addPreviewMessage(messages[messageIndex % messages.length]);
-          messageIndex++;
-        } else {
-          clearInterval(interval);
-        }
-      }, 1200); // Slower timing for smoother effect
-      
-      return () => clearInterval(interval);
-    }
-  }, [isGenerating, previewUrl]);
-
-  const handleFollowUpSubmit = async () => {
-    if (!followUpInput.trim() || isGenerating || !sandboxId) return;
-
-    const userMessage: Message = {
-      type: "claude_message",
-      content: `**🤖 You:** ${followUpInput}`
-    };
-    
-    setMessages(prev => [...prev, userMessage]);
-    setFollowUpInput("");
-    setIsGenerating(true);
-
-    try {
-      const response = await fetch("/api/generate-daytona", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ 
-          prompt: followUpInput,
-          sandboxId: sandboxId,
-          isFollowUp: true
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to process follow-up");
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error("No response body");
-      }
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-
-            if (data === "[DONE]") {
-              setIsGenerating(false);
-              break;
-            }
-
-            try {
-              const message = JSON.parse(data) as Message;
-              
-              if (message.type === "error") {
-                throw new Error(message.message);
-              } else if (message.type === "complete") {
-                setIsGenerating(false);
-              } else {
-                setMessages((prev) => [...prev, message]);
-              }
-            } catch (e) {
-              // Ignore parse errors
-            }
-          }
-        }
-      }
-    } catch (err: any) {
-      console.error("Error processing follow-up:", err);
-      setError(err.message || "An error occurred");
-      setIsGenerating(false);
-    }
-  };
-  
-  const generateProjectName = (prompt: string): string => {
-    // Generate a friendly project name from the prompt
-    const words = prompt.toLowerCase().match(/\b\w+\b/g) || [];
-    const importantWords = words.filter(word => 
-      !['a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'create', 'make', 'build'].includes(word)
-    );
-    
-    if (importantWords.length === 0) {
-      return "My Website";
-    }
-    
-    const name = importantWords.slice(0, 3).map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
-    
-    return name.length > 30 ? name.substring(0, 30) + '...' : name;
-  };
-
-  // Left Panel Component
-  const LeftPanel = useCallback(() => (
+const LeftPanel = React.memo(({
+    prompt,
+    user,
+    messages,
+    isGenerating,
+    error,
+    messagesEndRef,
+    followUpInput,
+    setFollowUpInput,
+    handleFollowUpSubmit,
+    previewUrl,
+    sandboxId,
+    handleStopGeneration,
+    selectedModel,
+    setSelectedModel
+}: any) => {
+    const router = useRouter();
+    return (
     <>
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900/50">
@@ -582,15 +125,24 @@ export default function GeneratePage() {
         )}
       </div>
       
+      {/* Model Selector */}
+        <div className="p-4 bg-gray-800/30 border-b border-gray-700">
+            <div className="relative w-full max-w-xs mx-auto bg-gray-900 rounded-full p-1 flex items-center">
+                <div className={`absolute top-1 left-1 w-1/2 h-8 bg-gradient-to-r from-purple-600 to-blue-600 rounded-full transition-transform duration-300 ease-in-out transform ${selectedModel === 'claude' ? 'translate-x-0' : 'translate-x-full'}`}></div>
+                <button onClick={() => setSelectedModel('claude')} className={`w-1/2 z-10 py-1 text-sm font-medium transition-colors duration-300 ${selectedModel === 'claude' ? 'text-white' : 'text-gray-400'}`}>Claude</button>
+                <button onClick={() => setSelectedModel('chatgpt')} className={`w-1/2 z-10 py-1 text-sm font-medium transition-colors duration-300 ${selectedModel === 'chatgpt' ? 'text-white' : 'text-gray-400'}`}>ChatGPT</button>
+            </div>
+        </div>
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto chat-scroll">
         <div className="p-4 space-y-3">
-          {messages.map((message, index) => {
+          {messages.map((message: Message, index: number) => {
             const importantMessage = getImportantMessage(message);
             
             return (
               <div key={index} className="message-fade-in">
-                {message.type === "claude_message" && (importantMessage || message.content?.includes("🤖 You:")) && (
+                {(message.type === "claude_message" || message.type === "progress") && (importantMessage || message.content?.includes("🤖 You:")) && (
                   <div className={`rounded-xl p-4 border transition-all duration-200 hover:shadow-lg ${
                     message.content?.includes("🤖 You:") 
                       ? "bg-blue-900/40 border-blue-700/50 ml-6" 
@@ -614,7 +166,7 @@ export default function GeneratePage() {
                       )}
                     </div>
                     <div className="text-gray-100 text-sm leading-relaxed" dangerouslySetInnerHTML={{
-                      __html: renderMarkdown(message.content?.includes("🤖 You:") ? message.content : importantMessage || "")
+                      __html: renderMarkdown(importantMessage || "")
                     }} />
                   </div>
                 )}
@@ -623,9 +175,17 @@ export default function GeneratePage() {
           })}
           
           {isGenerating && (
-            <div className="flex items-center gap-3 text-gray-400 p-4 bg-gray-800/30 rounded-xl">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-400"></div>
-              <span className="text-sm">AI is working<span className="loading-dots"></span></span>
+            <div className="flex items-center justify-between gap-3 text-gray-400 p-4 bg-gray-800/30 rounded-xl">
+                <div className="flex items-center gap-3">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-400"></div>
+                    <span className="text-sm">AI is working<span className="loading-dots"></span></span>
+                </div>
+                <button onClick={handleStopGeneration} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    Stop
+                </button>
             </div>
           )}
           
@@ -675,10 +235,16 @@ export default function GeneratePage() {
         )}
       </div>
     </>
-  ), [messages, isGenerating, error, followUpInput, previewUrl, sandboxId, prompt, user, router]);
+    );
+});
+LeftPanel.displayName = 'LeftPanel';
 
-  // Right Panel Component
-  const RightPanel = useCallback(() => (
+const RightPanel = React.memo(({
+    previewUrl,
+    isGenerating,
+    previewMessages
+} : any) => {
+    return (
     <div className="h-full flex flex-col bg-gray-800">
       {/* Preview Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800/50">
@@ -717,7 +283,7 @@ export default function GeneratePage() {
             
             <div className="relative bg-gray-700/20 backdrop-blur-md rounded-2xl p-6 w-[480px] h-48 overflow-hidden border border-gray-600/30">
               <div className="absolute inset-6 flex flex-col justify-end overflow-hidden">
-                {previewMessages.slice(-6).map((msg, index) => (
+                {previewMessages.slice(-6).map((msg: PreviewMessage, index: number) => (
                   <div
                     key={msg.id}
                     className="text-green-300 text-sm font-mono py-1.5 animate-smoothSlideUp flex items-center gap-2"
@@ -760,13 +326,428 @@ export default function GeneratePage() {
         )}
       </div>
     </div>
-  ), [previewUrl, isGenerating, previewMessages]);
+    );
+});
+RightPanel.displayName = 'RightPanel';
+
+export default function GeneratePage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const prompt = searchParams.get("prompt") || "";
+  const model = searchParams.get("model") || "claude";
+  const existingSandboxId = searchParams.get("sandboxId") || null;
+  const isContinuing = searchParams.get("continue") === "true";
+  
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [previewMessages, setPreviewMessages] = useState<PreviewMessage[]>([]);
+  const [followUpInput, setFollowUpInput] = useState("");
+  const [sandboxId, setSandboxId] = useState<string | null>(existingSandboxId);
+  const [user, setUser] = useState<User | null>(null);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState(model);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasStartedRef = useRef(false);
+  const previewMessageIdRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsGenerating(false);
+      setError("Generation stopped by user.");
+    }
+  };
+  
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+  
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+  
+  const generateProjectName = (prompt: string): string => {
+    const words = prompt.toLowerCase().match(/\b\w+\b/g) || [];
+    const importantWords = words.filter(word => 
+      !['a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'create', 'make', 'build'].includes(word)
+    );
+    
+    if (importantWords.length === 0) {
+      return "My Website";
+    }
+    
+    const name = importantWords.slice(0, 3).map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+    
+    return name.length > 30 ? name.substring(0, 30) + '...' : name;
+  };
+
+  const saveProject = useCallback((sandboxId: string, previewUrl: string | null) => {
+    if (!user) return;
+    
+    try {
+      const projectId = Date.now().toString();
+      const projectName = generateProjectName(prompt);
+      
+      const newProject = {
+        id: projectId,
+        name: projectName,
+        prompt,
+        sandboxId,
+        previewUrl: previewUrl || "",
+        createdAt: new Date().toISOString()
+      };
+      
+      const updatedUser = {
+        ...user,
+        projects: [...user.projects, newProject]
+      };
+      
+      localStorage.setItem("lovable_current_user", JSON.stringify(updatedUser));
+      
+      const users = JSON.parse(localStorage.getItem("lovable_users") || "{}");
+      if (users[user.email]) {
+        users[user.email].projects = updatedUser.projects;
+        localStorage.setItem("lovable_users", JSON.stringify(users));
+      }
+      
+      setUser(updatedUser);
+      setCurrentProjectId(projectId);
+      
+    } catch (error) {
+      console.error("Failed to save project:", error);
+    }
+  }, [user, prompt]);
+
+  const generateWebsite = useCallback(async () => {
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    try {
+      setMessages(prev => [...prev, {
+        type: "claude_message",
+        content: "**🚀 RAJAT:** Starting to generate your website..."
+      }]);
+      
+      const requestBody = { 
+        prompt,
+        sandboxId: existingSandboxId,
+        isFollowUp: false,
+        model: selectedModel
+      };
+      
+      const response = await fetch("/api/generate-daytona", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+        signal
+      });
+      
+      if (!response.ok) {
+        let errorMessage;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
+        } catch (e) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+
+            if (data === "[DONE]") {
+              setIsGenerating(false);
+              break;
+            }
+
+            try {
+              const message = JSON.parse(data) as Message;
+              
+              if (message.type === "error") {
+                throw new Error(message.message);
+              } else if (message.type === "complete") {
+                const newPreviewUrl = message.previewUrl || null;
+                const newSandboxId = message.sandboxId || null;
+                
+                setPreviewUrl(newPreviewUrl);
+                setSandboxId(newSandboxId);
+                setIsGenerating(false);
+                
+                if (newSandboxId && !isContinuing && user) {
+                  saveProject(newSandboxId, newPreviewUrl);
+                }
+              } else {
+                setMessages((prev) => [...prev, message]);
+              }
+            } catch (e) {
+              console.warn("⚠️ Failed to parse message:", data, e);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+        if (err.name === 'AbortError') {
+            return;
+        }
+      const errorMessage = err.message || "An unknown error occurred";
+      setError(errorMessage);
+      setIsGenerating(false);
+      
+      setMessages(prev => [...prev, {
+        type: "claude_message",
+        content: `**❌ Error:** ${errorMessage}`
+      }]);
+    }
+  }, [prompt, existingSandboxId, user, isContinuing, saveProject, selectedModel]);
+
+  useEffect(() => {
+    const currentUser = localStorage.getItem("lovable_current_user");
+    if (!currentUser) {
+      router.push("/");
+      return;
+    }
+    
+    try {
+      const userData = JSON.parse(currentUser);
+      setUser(userData);
+    } catch (e) {
+      router.push("/");
+      return;
+    }
+    
+    if (!prompt) {
+      router.push("/");
+      return;
+    }
+  }, [prompt, router]);
+  
+  useEffect(() => {
+    if (!user || !prompt || hasStartedRef.current || isContinuing) {
+      return;
+    }
+    
+    hasStartedRef.current = true;
+    
+    setTimeout(() => {
+      setIsGenerating(true);
+      
+      fetch('/api/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test: 'connection' })
+      })
+      .then(res => res.json())
+      .then(data => {
+        generateWebsite();
+      })
+      .catch(err => {
+        generateWebsite(); // Try anyway
+      });
+    }, 100);
+  }, [user, prompt, isContinuing, generateWebsite]);
+  
+  useEffect(() => {
+    if (user && isContinuing && existingSandboxId && prompt) {
+      const projectPreviewUrl = user.projects.find(p => p.sandboxId === existingSandboxId)?.previewUrl;
+      
+      if (projectPreviewUrl) {
+        setPreviewUrl(projectPreviewUrl);
+      } else {
+        setPreviewUrl("https://example.com/existing-project");
+      }
+      
+      setSandboxId(existingSandboxId);
+      
+      setMessages([{
+        type: "claude_message",
+        content: "**🔄 RAJAT:** Welcome back! Your existing project has been loaded and is ready for modifications.\n\n**Original prompt:** " + prompt + "\n\nYou can now ask me to make changes, add features, or fix any issues with your project. What would you like to do?"
+      }]);
+      
+      setIsGenerating(false);
+      setError(null);
+    }
+  }, [user, isContinuing, existingSandboxId, prompt]);
+
+  const addPreviewMessage = (text: string) => {
+    const newMessage: PreviewMessage = {
+      id: `preview-${previewMessageIdRef.current++}`,
+      text,
+      timestamp: Date.now()
+    };
+    setPreviewMessages(prev => [...prev, newMessage]);
+    
+    setTimeout(() => {
+      setPreviewMessages(prev => prev.filter(msg => msg.id !== newMessage.id));
+    }, 4000);
+  };
+
+  useEffect(() => {
+    if (isGenerating && !previewUrl) {
+      const messages = [
+        "🚀 Initializing sandbox environment...",
+        "📦 Downloading Next.js framework...",
+        "⚙️ Installing dependencies...",
+        "🔧 Configuring TypeScript...",
+        "🎨 Setting up Tailwind CSS...",
+        "📝 Generating project structure...",
+        "🔄 Optimizing build configuration...",
+        "🌐 Starting development server...",
+        "⚡ Warming up modules...",
+        "🔍 Running health checks...",
+        "✨ Finalizing setup..."
+      ];
+      
+      let messageIndex = 0;
+      const interval = setInterval(() => {
+        if (isGenerating && !previewUrl) {
+          addPreviewMessage(messages[messageIndex % messages.length]);
+          messageIndex++;
+        } else {
+          clearInterval(interval);
+        }
+      }, 1200);
+      
+      return () => clearInterval(interval);
+    }
+  }, [isGenerating, previewUrl]);
+
+  const handleFollowUpSubmit = useCallback(async () => {
+    if (!followUpInput.trim() || isGenerating || !sandboxId) return;
+
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    const userMessage: Message = {
+      type: "claude_message",
+      content: `**🤖 You:** ${followUpInput}`
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
+    setFollowUpInput("");
+    setIsGenerating(true);
+
+    try {
+      const response = await fetch("/api/generate-daytona", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          prompt: followUpInput,
+          sandboxId: sandboxId,
+          isFollowUp: true,
+          model: selectedModel
+        }),
+        signal
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to process follow-up");
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+
+            if (data === "[DONE]") {
+              setIsGenerating(false);
+              break;
+            }
+
+            try {
+              const message = JSON.parse(data) as Message;
+              
+              if (message.type === "error") {
+                throw new Error(message.message);
+              } else if (message.type === "complete") {
+                setIsGenerating(false);
+              } else {
+                setMessages((prev) => [...prev, message]);
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+        if (err.name === 'AbortError') {
+            return;
+        }
+      setError(err.message || "An error occurred");
+      setIsGenerating(false);
+    }
+  }, [followUpInput, isGenerating, sandboxId, selectedModel]);
 
   return (
     <main className="h-screen bg-black flex flex-col overflow-hidden">
       <ResizablePanels
-        leftPanel={<LeftPanel />}
-        rightPanel={<RightPanel />}
+        leftPanel={
+            <LeftPanel
+                prompt={prompt}
+                user={user}
+                messages={messages}
+                isGenerating={isGenerating}
+                error={error}
+                messagesEndRef={messagesEndRef}
+                followUpInput={followUpInput}
+                setFollowUpInput={setFollowUpInput}
+                handleFollowUpSubmit={handleFollowUpSubmit}
+                previewUrl={previewUrl}
+                sandboxId={sandboxId}
+                handleStopGeneration={handleStopGeneration}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+            />
+        }
+        rightPanel={
+            <RightPanel
+                previewUrl={previewUrl}
+                isGenerating={isGenerating}
+                previewMessages={previewMessages}
+            />
+        }
         initialLeftWidth={35}
         minLeftWidth={25}
         maxLeftWidth={60}
@@ -775,7 +756,6 @@ export default function GeneratePage() {
   );
 }
 
-// CSS animations
 const styles = `
   @keyframes slideUpFade {
     0% {
@@ -797,7 +777,6 @@ const styles = `
   }
 `;
 
-// Inject styles
 if (typeof document !== 'undefined') {
   const styleSheet = document.createElement('style');
   styleSheet.textContent = styles;
