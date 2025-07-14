@@ -96,14 +96,14 @@ const LeftPanel = React.memo(({
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-sm">R</span>
+            <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center">
+              <span className="text-white font-bold text-sm">R</span>
+            </div>
+            <div>
+              <h2 className="text-white font-semibold">RAJAT AI</h2>
+              <p className="text-gray-400 text-xs">Building your project</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-white font-semibold">RAJAT AI</h2>
-            <p className="text-gray-400 text-xs">Building your project</p>
-          </div>
-        </div>
         </div>
         <button
           onClick={() => router.push('/')}
@@ -133,6 +133,21 @@ const LeftPanel = React.memo(({
 
             return (
               <div key={index} className="message-fade-in">
+
+                {message.type === "tool_use" && (
+                  <div className="py-2 px-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                      </svg>
+                      <span className="text-yellow-300 text-sm font-medium bg-gray-700 px-2 py-1 rounded-full">Tool Use: {message.name}</span>
+                    </div>
+                    <pre className="text-gray-200 text-xs bg-gray-900 p-3 rounded-md overflow-auto">
+                      <code>{JSON.stringify(message.input, null, 2)}</code>
+                    </pre>
+                  </div>
+                )}
+
                 {(message.type === "claude_message" || message.type === "progress") && (importantMessage || message.content?.includes("🤖 You:")) && (
                   <div className={`py-2 ${message.content?.includes("🤖 You:") ? "" : "bg-gray-800/60 rounded-xl p-4"}`}>
                     <div className="flex items-center gap-3 mb-2">
@@ -158,19 +173,7 @@ const LeftPanel = React.memo(({
                   </div>
                 )}
 
-                {message.type === "tool_use" && (
-                  <div className="py-2 px-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-5 h-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
-                      </svg>
-                      <span className="text-yellow-300 text-sm font-medium bg-gray-700 px-2 py-1 rounded-full">Tool Use: {message.name}</span>
-                    </div>
-                    <pre className="text-gray-200 text-xs bg-gray-900 p-3 rounded-md overflow-auto">
-                      <code>{JSON.stringify(message.input, null, 2)}</code>
-                    </pre>
-                  </div>
-                )}
+
 
                 {message.type === "tool_result" && (
                   <div className="py-2 px-4 bg-gray-800/50 rounded-lg border border-gray-700">
