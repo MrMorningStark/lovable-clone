@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ResizablePanels from "@/components/ResizablePanels";
 import React from "react";
+import GmailUI from "./GmailUI";
 
 interface User {
   email: string;
@@ -27,8 +28,23 @@ interface Message {
   message?: string;
   previewUrl?: string;
   sandboxId?: string;
+  emails?: any[]; // Added for email data
 }
 
+interface Email {
+  from: string;
+  subject: string;
+  message: string;
+}
+
+interface BackendResponse {
+  response?: string;
+  function_calls?: Array<{
+    name: string;
+    arguments: Record<string, any>;
+    result?: string; // Empty in your case, but keep for flexibility
+  }>;
+}
 interface PreviewMessage {
   id: string;
   text: string;
@@ -207,7 +223,7 @@ const LeftPanel = React.memo(({
             </div>
           )}
 
-          {error && (
+          {error && !error.includes("Failed to parse email data") && (
             <div className="bg-red-900/30 border border-red-600/50 rounded-xl p-4">
               <p className="text-red-300 text-sm">{error}</p>
             </div>
@@ -257,29 +273,19 @@ const LeftPanel = React.memo(({
 });
 LeftPanel.displayName = 'LeftPanel';
 
-const RightPanel = React.memo(({
-  previewUrl,
-  isGenerating,
-  previewMessages,
-  selectedModel
-}: any) => {
+const RightPanel = React.memo(({ previewUrl, isGenerating, previewMessages, selectedModel, emailMessages }: { previewUrl: string | null; isGenerating: boolean; previewMessages: PreviewMessage[]; selectedModel: string; emailMessages: Email[] }) => {
   return (
-    <div className="h-full flex flex-col bg-gray-800">
+    <div className="h-full flex flex-col bg-gray-800 overflow-hidden">
       {/* Preview Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900">
         <div className="flex items-center gap-3">
           <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
           <span className="text-gray-300 text-sm font-medium">
-            {selectedModel === 'rajataiagent' ? "AI Agent Interaction" : (previewUrl ? "Live Preview" : isGenerating ? "Generating..." : "Preview")}
+            {selectedModel === "rajataiagent" ? "AI Agent Interaction" : previewUrl ? "Live Preview" : isGenerating ? "Generating..." : "Preview"}
           </span>
         </div>
-        {previewUrl && selectedModel !== 'rajataiagent' && (
-          <a
-            href={previewUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors flex items-center gap-1"
-          >
+        {previewUrl && selectedModel !== "rajataiagent" && (
+          <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors flex items-center gap-1">
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
@@ -287,18 +293,23 @@ const RightPanel = React.memo(({
           </a>
         )}
       </div>
-
       {/* Preview Content */}
-      <div className="flex-1 relative">
-        {selectedModel === 'rajataiagent' ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/50">
-            <div className="w-24 h-24 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center mb-4 animate-pulse">
-              <span className="text-white text-4xl font-bold">AI</span>
+      <div className="flex-1 relative overflow-hidden">
+        {selectedModel === "rajataiagent" ? (
+          emailMessages.length > 0 ? (
+            <div className="h-full overflow-auto">
+              <GmailUI emails={emailMessages} />
             </div>
-            <p className="text-gray-300 text-lg text-center">This panel is for AI Agent interaction.</p>
-            <p className="text-gray-400 text-sm text-center mt-2">Chat with RajatAiAgent on the left panel to get started!</p>
-            <p className="text-gray-400 text-sm text-center mt-1">You can ask questions, get explanations, or discuss ideas.</p>
-          </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/50">
+              <div className="w-24 h-24 bg-gray-700 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                <span className="text-white text-4xl font-bold">AI</span>
+              </div>
+              <p className="text-gray-300 text-lg text-center">This panel is for AI Agent interaction.</p>
+              <p className="text-gray-400 text-sm text-center mt-2">Chat with RajatAiAgent on the left panel to get started!</p>
+              <p className="text-gray-400 text-sm text-center mt-1">You can ask questions, get explanations, or discuss ideas.</p>
+            </div>
+          )
         ) : (
           <>
             {!previewUrl && isGenerating && (
@@ -310,19 +321,13 @@ const RightPanel = React.memo(({
                     </div>
                   </div>
                 </div>
-
                 <div className="relative bg-gray-700/20 backdrop-blur-md rounded-2xl p-6 w-[480px] h-48 overflow-hidden border border-gray-600/30">
                   <div className="absolute inset-6 flex flex-col justify-end overflow-hidden">
                     {previewMessages.slice(-6).map((msg: PreviewMessage, index: number) => (
                       <div
                         key={msg.id}
                         className="text-green-300 text-sm font-mono py-1.5 animate-smoothSlideUp flex items-center gap-2"
-                        style={{
-                          animationDelay: `${index * 0.1}s`,
-                          animationDuration: '4s',
-                          animationFillMode: 'forwards',
-                          opacity: 1 - (index * 0.12)
-                        }}
+                        style={{ animationDelay: `${index * 0.1}s`, animationDuration: "4s", animationFillMode: "forwards", opacity: 1 - index * 0.12 }}
                       >
                         <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
                         {msg.text}
@@ -334,15 +339,7 @@ const RightPanel = React.memo(({
                 </div>
               </div>
             )}
-
-            {previewUrl && (
-              <iframe
-                src={previewUrl}
-                className="w-full h-full border-0"
-                title="Website Preview"
-              />
-            )}
-
+            {previewUrl && <iframe src={previewUrl} className="w-full h-full border-0" title="Website Preview" />}
             {!previewUrl && !isGenerating && (
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="w-16 h-16 bg-gray-700/50 rounded-2xl flex items-center justify-center mb-4">
@@ -360,6 +357,7 @@ const RightPanel = React.memo(({
     </div>
   );
 });
+
 RightPanel.displayName = 'RightPanel';
 
 export default function GeneratePage() {
@@ -371,6 +369,7 @@ export default function GeneratePage() {
   const isContinuing = searchParams.get("continue") === "true";
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [emailMessages, setEmailMessages] = useState<Email[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -459,64 +458,52 @@ export default function GeneratePage() {
   const generateWebsiteRajatAiAgent = useCallback(async () => {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
-
     try {
-      setMessages(prev => [...prev, {
-        type: "claude_message",
-        content: "**🚀 RajatAiAgent:** Starting to generate your response..."
-      }]);
-
+      setMessages((prev) => [
+        ...prev,
+        { type: "claude_message", content: "**🚀 RajatAiAgent:** Starting to generate your response..." },
+      ]);
       const response = await fetch("http://127.0.0.1:8000/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: prompt }),
-        signal
+        signal,
       });
-
       if (!response.ok) {
-        let errorMessage;
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
-        } catch (e) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        throw new Error(errorMessage);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
       }
-
-      const data = await response.json();
-
+      const data: BackendResponse = await response.json();
       if (data.response) {
         setMessages((prev) => [...prev, { type: "claude_message", content: data.response }]);
+        if (data.function_calls?.some((call) => call.name === "read_emails")) {
+          try {
+            const jsonMatch = data.response.match(/```json\n([\s\S]*?)\n```/);
+            if (jsonMatch?.[1]) {
+              const emails: Email[] = JSON.parse(jsonMatch[1]);
+              setEmailMessages(emails);
+            } else {
+              console.warn("No valid JSON found in response for read_emails");
+            }
+          } catch (e) {
+            console.warn("Failed to parse email JSON:", e); // Log to console only
+          }
+        }
       }
-
-      if (data.function_calls && Array.isArray(data.function_calls)) {
-        data.function_calls.forEach((call: any) => {
+      if (data.function_calls?.length) {
+        data.function_calls.forEach((call) => {
           setMessages((prev) => [...prev, { type: "tool_use", name: call.name, input: call.arguments }]);
         });
-      } else if (data.type === "error") {
-        throw new Error(data.message);
-      } else if (!data.response) { // Only add as generic message if no response and no function calls
-        setMessages((prev) => [...prev, data as Message]);
       }
-
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        return;
-      }
+      if (err.name === "AbortError") return;
       const errorMessage = err.message || "An unknown error occurred";
-      setError(errorMessage);
-
-      setMessages(prev => [...prev, {
-        type: "claude_message",
-        content: `**❌ Error:** ${errorMessage}`
-      }]);
+      setError(errorMessage); // Keep this for non-JSON-parsing errors (e.g., HTTP errors)
+      setMessages((prev) => [...prev, { type: "claude_message", content: `**❌ Error:** ${errorMessage}` }]);
     } finally {
       setIsGenerating(false);
     }
-  }, [prompt, user, isContinuing, saveProject]);
+  }, [prompt]);
 
   const generateWebsite = useCallback(async () => {
     if (selectedModel === 'rajataiagent') {
@@ -720,118 +707,91 @@ export default function GeneratePage() {
   }, [isGenerating, previewUrl]);
 
   const handleFollowUpSubmit = useCallback(async () => {
-    if (!followUpInput.trim() || isGenerating || (selectedModel === 'code' && !sandboxId)) return;
-
+    if (!followUpInput.trim() || isGenerating || (selectedModel === "code" && !sandboxId)) return;
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
-
-    const userMessage: Message = {
-      type: "claude_message",
-      content: `**🤖 You:** ${followUpInput}`
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+    const userMessage: Message = { type: "claude_message", content: `**🤖 You:** ${followUpInput}` };
+    setMessages((prev) => [...prev, userMessage]);
     setFollowUpInput("");
     setIsGenerating(true);
-
     try {
-      let response;
-      if (selectedModel === 'rajataiagent') {
-        response = await fetch("http://127.0.0.1:8000/chat", {
+      if (selectedModel === "rajataiagent") {
+        const response = await fetch("http://127.0.0.1:8000/chat", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: followUpInput }),
-          signal
+          signal,
         });
-
         if (!response.ok) {
-          let errorMessage;
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
-          } catch (e) {
-            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          }
-          throw new Error(errorMessage);
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
         }
-
-        const data = await response.json();
+        const data: BackendResponse = await response.json();
         if (data.response) {
           setMessages((prev) => [...prev, { type: "claude_message", content: data.response }]);
+          if (data.function_calls?.some((call) => call.name === "read_emails")) {
+            try {
+              const jsonMatch = data.response.match(/```json\n([\s\S]*?)\n```/);
+              if (jsonMatch?.[1]) {
+                const emails: Email[] = JSON.parse(jsonMatch[1]);
+                setEmailMessages(emails);
+              } else {
+                console.warn("No valid JSON found in response for read_emails");
+              }
+            } catch (e) {
+              console.warn("Failed to parse email JSON:", e); // Log to console only
+            }
+          }
         }
-        if (data.function_calls && Array.isArray(data.function_calls)) {
-          data.function_calls.forEach((call: any) => {
+        if (data.function_calls?.length) {
+          data.function_calls.forEach((call) => {
             setMessages((prev) => [...prev, { type: "tool_use", name: call.name, input: call.arguments }]);
           });
         }
-        setIsGenerating(false);
       } else {
-        response = await fetch("/api/generate-daytona", {
+        const response = await fetch("/api/generate-daytona", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            prompt: followUpInput,
-            sandboxId: sandboxId,
-            isFollowUp: true,
-            model: selectedModel
-          }),
-          signal
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: followUpInput, sandboxId, isFollowUp: true, model: selectedModel }),
+          signal,
         });
-
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.error || "Failed to process follow-up");
         }
-
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
-
         if (!reader) {
           throw new Error("No response body");
         }
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           const chunk = decoder.decode(value);
           const lines = chunk.split("\n");
-
           for (const line of lines) {
-            if (line.startsWith("data: ")) {
+            if (line.startsWith("data:")) {
               const data = line.slice(6);
-
-              if (data === "[DONE]") {
-                break;
-              }
-
+              if (data === "[DONE]") break;
               try {
                 const message = JSON.parse(data) as Message;
-
                 if (message.type === "error") {
                   throw new Error(message.message);
                 } else if (message.type === "complete") {
-                  // This case is handled by the finally block
+                  // Handled in finally block
                 } else {
                   setMessages((prev) => [...prev, message]);
                 }
               } catch (e) {
-                // Ignore parse errors
+                console.warn("Failed to parse message:", data, e);
               }
             }
           }
         }
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setIsGenerating(false); // Ensure isGenerating is reset on abort
-        return;
-      }
-      setError(err.message || "An error occurred");
+      if (err.name === "AbortError") return;
+      setError(err.message || "An error occurred"); // Keep for non-JSON-parsing errors
     } finally {
       setIsGenerating(false);
     }
@@ -864,6 +824,7 @@ export default function GeneratePage() {
             isGenerating={isGenerating}
             previewMessages={previewMessages}
             selectedModel={selectedModel}
+            emailMessages={emailMessages}
           />
         }
         initialLeftWidth={35}
@@ -875,23 +836,13 @@ export default function GeneratePage() {
 }
 
 const styles = `
-  @keyframes slideUpFade {
-    0% {
-      opacity: 1;
-      transform: translateY(0);
-    }
-    90% {
-      opacity: 1;
-      transform: translateY(-10px);
-    }
-    100% {
-      opacity: 0;
-      transform: translateY(-20px);
-    }
+  @keyframes smoothSlideUp {
+    0% { opacity: 1; transform: translateY(0); }
+    90% { opacity: 1; transform: translateY(-10px); }
+    100% { opacity: 0; transform: translateY(-20px); }
   }
-  
-  .animate-slideUpFade {
-    animation: slideUpFade 3s ease-out forwards;
+  .animate-smoothSlideUp {
+    animation: smoothSlideUp 3s ease-out forwards;
   }
 `;
 
