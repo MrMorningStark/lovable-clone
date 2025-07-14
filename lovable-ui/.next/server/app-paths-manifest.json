@@ -1,7 +1,4 @@
 {
-  "/_not-found/page": "app/_not-found/page.js",
-  "/generate/page": "app/generate/page.js",
   "/page": "app/page.js",
-  "/api/test/route": "app/api/test/route.js",
-  "/api/generate-daytona/route": "app/api/generate-daytona/route.js"
+  "/generate/page": "app/generate/page.js"
 }

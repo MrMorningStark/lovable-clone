@@ -24,7 +24,7 @@ interface DashboardProps {
 export default function Dashboard({ user, onLogout }: DashboardProps) {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [selectedModel, setSelectedModel] = useState('claude');
+  const [selectedModel, setSelectedModel] = useState('rajataiagent');
 
   const handleContinueProject = (project: any) => {
     // Navigate to generate page with existing sandbox
@@ -158,8 +158,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
           {/* Model Selector */}
           <div className="flex items-center justify-center gap-4 mb-12">
-            <button onClick={() => setSelectedModel('claude')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'claude' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Claude</button>
-            <button onClick={() => setSelectedModel('chatgpt')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'chatgpt' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>ChatGPT</button>
+            <button onClick={() => setSelectedModel('code')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'code' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'}`}>Code</button>
+            <button onClick={() => setSelectedModel('rajataiagent')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${selectedModel === 'rajataiagent' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}>RajatAiAgent</button>
           </div>
 
           {/* Existing Projects */}
